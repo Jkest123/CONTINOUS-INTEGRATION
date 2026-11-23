@@ -1,10 +1,10 @@
 {
-  "family": "lumenboard",
+  "family": "stategyhub",
   "networkMode": "awsvpc",
   "requiresCompatibilities": ["FARGATE"],
   "cpu": "256",
   "memory": "512",
-  "executionRoleArn": "REPLACE_WITH_ECS_TASK_EXECUTION_ROLE_ARN",
+  "executionRoleArn": "arn:aws:iam::153372323702:role/ecsTaskExecutionRole_strategyhub",
   "containerDefinitions": [
     {
       "name": "lumenboard",
@@ -18,7 +18,7 @@
         }
       ],
       "repositoryCredentials": {
-        "credentialsParameter": "REPLACE_WITH_DOCKERHUB_SECRET_ARN"
+        "credentialsParameter": "arn:aws:secretsmanager:us-east-1:153372323702:secret:strategyhub/dockerhub-D7acv0"
       },
       "healthCheck": {
         "command": ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health || exit 1"],
@@ -30,8 +30,8 @@
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
-          "awslogs-group": "/ecs/lumenboard",
-          "awslogs-region": "REPLACE_WITH_AWS_REGION",
+          "awslogs-group": "/ecs/stategy",
+          "awslogs-region": "us-east-1",
           "awslogs-stream-prefix": "app"
         }
       }
