@@ -33,7 +33,7 @@
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
-          "awslogs-group": "/ecs/strategyhub",
+          "awslogs-group": "/ecs/Strategyhub-task",
           "awslogs-region": "us-east-1",
           "awslogs-stream-prefix": "app"
         }
