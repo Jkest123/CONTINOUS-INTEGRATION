@@ -1,3 +1,4 @@
+
 name: CI/CD
 
 on:
@@ -8,23 +9,23 @@ permissions:
   contents: read
 
 concurrency:
-  group: lumenboard-production
+  group: strategyhub-production
   cancel-in-progress: false
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
   ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
   ECS_SERVICE: ${{ vars.ECS_SERVICE }}
   ECS_TASK_FAMILY: ${{ vars.ECS_TASK_FAMILY }}
   CONTAINER_NAME: ${{ vars.CONTAINER_NAME }}
-  ECS_TASK_EXECUTION_ROLE_ARN: ${{ vars.ECS_TASK_EXECUTION_ROLE_ARN }}
-  DOCKERHUB_SECRET_ARN: ${{ vars.DOCKERHUB_SECRET_ARN }}
-  IMAGE_NAME: ${{ vars.DOCKERHUB_NAMESPACE }}/lumenboard
+  ECR_REPOSITORY: strategyhub-container
 
 jobs:
   quality:
     name: Lint, test, and production build
     runs-on: ubuntu-latest
+
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -48,12 +49,14 @@ jobs:
         run: npm run build
 
   deploy:
-    name: Build, push, and deploy to ECS
+    name: Build, push, and deploy to Strategyhub ECS
     needs: quality
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       id-token: write
+
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -61,7 +64,15 @@ jobs:
       - name: Validate deployment variables
         shell: bash
         run: |
-          required=(AWS_REGION ECS_CLUSTER ECS_SERVICE ECS_TASK_FAMILY CONTAINER_NAME ECS_TASK_EXECUTION_ROLE_ARN DOCKERHUB_SECRET_ARN DOCKERHUB_NAMESPACE)
+          required=(
+            AWS_REGION
+            AWS_ROLE_ARN
+            ECS_CLUSTER
+            ECS_SERVICE
+            ECS_TASK_FAMILY
+            CONTAINER_NAME
+          )
+
           for name in "${required[@]}"; do
             if [[ -z "${!name}" ]]; then
               echo "::error::Required repository variable $name is missing."
@@ -69,16 +80,20 @@ jobs:
             fi
           done
 
+      - name: Configure AWS credentials with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push the commit image
+      - name: Build and push Strategyhub image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -86,45 +101,18 @@ jobs:
           build-args: |
             VITE_APP_VERSION=${{ github.sha }}
           tags: |
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.IMAGE_NAME }}:latest
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
 
-      - name: Configure AWS credentials with GitHub OIDC
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Prepare task definition
-        shell: bash
-        run: |
-          jq \
-            --arg executionRoleArn "$ECS_TASK_EXECUTION_ROLE_ARN" \
-            --arg secretArn "$DOCKERHUB_SECRET_ARN" \
-            --arg region "$AWS_REGION" \
-            --arg containerName "$CONTAINER_NAME" \
-            --arg family "$ECS_TASK_FAMILY" \
-            '.family = $family
-             | .executionRoleArn = $executionRoleArn
-             | .containerDefinitions |= map(
-                 if .name == $containerName then
-                   .repositoryCredentials.credentialsParameter = $secretArn
-                   | .logConfiguration.options["awslogs-region"] = $region
-                 else
-                   .
-                 end
-               )' \
-            task-definition.json > task-definition.rendered.json
-
-      - name: Set the exact commit image on the task definition
+      - name: Render ECS task definition
         id: task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
-          task-definition: task-definition.rendered.json
+          task-definition: task-definition.json
           container-name: ${{ env.CONTAINER_NAME }}
-          image: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
 
-      - name: Deploy and wait for service stability
+      - name: Deploy and wait for ECS service stability
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.task-def.outputs.task-definition }}
